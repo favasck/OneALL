@@ -1,0 +1,594 @@
+// OneAll — data model
+// Derived from OneAll_Master_Project_Plan_v1.1.docx, Section 8.2 "Core entities".
+// This is a Stage 1 scaffold: fields cover the MVP scope (Section 2.2) plus the
+// hooks Section 2.3 explicitly defers (e.g. CreditNote, WarehouseTransfer) are
+// modeled but marked // Phase 3 / later where the plan says so, so the schema
+// doesn't need reshaping when those features are built.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy & company structure (Section 8.2: "Tenant, company, branch,
+// warehouse and financial period")
+// ---------------------------------------------------------------------------
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  route     Route    @default(NATIVE) // Native vs Tally-Connect, Section 2.1
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  companies    Company[]
+  users        User[]
+  subscription Subscription?
+  supportCases SupportCase[]
+}
+
+enum Route {
+  NATIVE
+  TALLY_CONNECT
+}
+
+model Company {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  name      String
+  crNumber  String? // commercial registration / tax details, Section 4.1
+  taxNumber String?
+  logoUrl   String?
+  baseCurrency String @default("QAR")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  branches         Branch[]
+  financialPeriods FinancialPeriod[]
+  customers        Customer[]
+  suppliers        Supplier[]
+  products         Product[]
+  taxCodes         TaxCode[]
+  accounts         Account[]
+  invoices         Invoice[]
+  purchaseBills    PurchaseBill[]
+  userAssignments  UserRoleAssignment[]
+  connectors       Connector[]
+
+  @@index([tenantId])
+}
+
+model Branch {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  name      String
+  isDefault Boolean  @default(false)
+
+  warehouses Warehouse[]
+
+  @@index([companyId])
+}
+
+model Warehouse {
+  id       String  @id @default(cuid())
+  branchId String
+  branch   Branch  @relation(fields: [branchId], references: [id])
+  name     String
+
+  stockBalances  StockBalance[]
+  stockMovements StockMovement[]
+
+  @@index([branchId])
+}
+
+model FinancialPeriod {
+  id        String    @id @default(cuid())
+  companyId String
+  company   Company   @relation(fields: [companyId], references: [id])
+  startDate DateTime
+  endDate   DateTime
+  isLocked  Boolean   @default(false) // Section 5.6 period-end workflow
+  lockedAt  DateTime?
+  lockedBy  String?
+
+  @@index([companyId])
+}
+
+// ---------------------------------------------------------------------------
+// Identity, roles & permissions (Section 3.3 permission model:
+// user x company x branch x module x action x record scope. Deny by default.)
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+  email        String   @unique
+  phone        String?
+  fullName     String
+  passwordHash String? // null until the user accepts their invitation (Section 5.8) and sets a password
+  status       UserStatus @default(INVITED)
+  createdAt    DateTime @default(now())
+
+  assignments UserRoleAssignment[]
+  sessions    Session[]
+
+  @@index([tenantId])
+}
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+}
+
+model Role {
+  id          String @id @default(cuid())
+  name        String @unique // Owner, Manager, Accountant, Salesperson, Storekeeper, Cashier, Support (Section 3.2)
+  description String?
+
+  permissions     RolePermission[]
+  assignments     UserRoleAssignment[]
+}
+
+model Permission {
+  id     String @id @default(cuid())
+  module String // e.g. "sales", "purchases", "inventory", "accounting", "reports"
+  action String // view | create | edit | approve | void | export | share (Section 3.3)
+
+  roles RolePermission[]
+
+  @@unique([module, action])
+}
+
+model RolePermission {
+  roleId       String
+  role         Role       @relation(fields: [roleId], references: [id])
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([roleId, permissionId])
+}
+
+// Scopes a role to a specific company/branch for a specific user — the
+// concrete "user x company x branch" part of the Section 3.3 permission model.
+model UserRoleAssignment {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  roleId    String
+  role      Role     @relation(fields: [roleId], references: [id])
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  branchId  String? // null = all branches
+  recordScope Json? // e.g. { "assignedSalespersonOnly": true } — Section 3.3 "record scope"
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([companyId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  tokenHash String   @unique // sha256 of the bearer token — the raw token is never stored (Section 9.1)
+  device    String?
+  ipAddress String?
+  createdAt DateTime @default(now())
+  revokedAt DateTime?
+
+  @@index([userId])
+  @@index([tokenHash])
+}
+
+// ---------------------------------------------------------------------------
+// Customers & suppliers (Section 4.2 / 4.3)
+// ---------------------------------------------------------------------------
+
+model Customer {
+  id            String   @id @default(cuid())
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id])
+  name          String
+  taxNumber     String?
+  creditLimit   Decimal  @default(0) @db.Decimal(14, 2)
+  creditDays    Int      @default(0)
+  salespersonId String? // assigned salesperson, Section 4.2
+  groupName     String?
+  openingBalance Decimal @default(0) @db.Decimal(14, 2)
+  createdAt     DateTime @default(now())
+
+  invoices Invoice[]
+  receipts Receipt[]
+
+  @@index([companyId])
+}
+
+model Supplier {
+  id           String  @id @default(cuid())
+  companyId    String
+  company      Company @relation(fields: [companyId], references: [id])
+  name         String
+  taxNumber    String?
+  paymentTerms String?
+  openingBalance Decimal @default(0) @db.Decimal(14, 2)
+  createdAt    DateTime @default(now())
+
+  purchaseBills PurchaseBill[]
+  payments      SupplierPayment[]
+
+  @@index([companyId])
+}
+
+// ---------------------------------------------------------------------------
+// Products & tax (Section 4.4)
+// ---------------------------------------------------------------------------
+
+model Product {
+  id            String        @id @default(cuid())
+  companyId     String
+  company       Company       @relation(fields: [companyId], references: [id])
+  sku           String
+  barcode       String?
+  name          String
+  category      String?
+  unit          String        @default("EA")
+  kind          ProductKind   @default(STOCK)
+  taxCodeId     String?
+  taxCode       TaxCode?      @relation(fields: [taxCodeId], references: [id])
+  purchaseCost  Decimal       @default(0) @db.Decimal(14, 2)
+  sellingPrice  Decimal       @default(0) @db.Decimal(14, 2)
+  reorderLevel  Decimal       @default(0) @db.Decimal(14, 2)
+  createdAt     DateTime      @default(now())
+
+  invoiceLines  InvoiceLine[]
+  purchaseLines PurchaseBillLine[]
+  stockBalances StockBalance[]
+  stockMovements StockMovement[]
+
+  @@index([companyId])
+  @@unique([companyId, sku])
+}
+
+enum ProductKind {
+  STOCK
+  NON_STOCK
+  SERVICE
+}
+
+model TaxCode {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  name      String // e.g. "Standard 5%", "Zero-rated" — see packages/shared posting rules
+  rate      Decimal  @db.Decimal(5, 2)
+  isInclusive Boolean @default(false)
+
+  products Product[]
+
+  @@index([companyId])
+}
+
+// ---------------------------------------------------------------------------
+// Sales (Section 4.5, workflow 5.2 — "start with invoice -> receipt")
+// ---------------------------------------------------------------------------
+
+model Invoice {
+  id            String        @id @default(cuid())
+  companyId     String
+  company       Company       @relation(fields: [companyId], references: [id])
+  customerId    String
+  customer      Customer      @relation(fields: [customerId], references: [id])
+  number        String
+  status        InvoiceStatus @default(DRAFT)
+  invoiceDate   DateTime      @default(now())
+  subtotal      Decimal       @default(0) @db.Decimal(14, 2)
+  taxTotal      Decimal       @default(0) @db.Decimal(14, 2)
+  grandTotal    Decimal       @default(0) @db.Decimal(14, 2)
+  postedAt      DateTime?
+  voidedAt      DateTime? // controlled void, Section 5.2 step 10
+  createdBy     String
+
+  lines       InvoiceLine[]
+  allocations ReceiptAllocation[]
+
+  @@index([companyId])
+  @@unique([companyId, number])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  POSTED
+  VOID
+}
+
+model InvoiceLine {
+  id        String  @id @default(cuid())
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Decimal @db.Decimal(14, 3)
+  unitPrice Decimal @db.Decimal(14, 2)
+  taxRate   Decimal @default(0) @db.Decimal(5, 2)
+  lineTotal Decimal @db.Decimal(14, 2)
+
+  @@index([invoiceId])
+}
+
+model Receipt {
+  id         String   @id @default(cuid())
+  companyId  String
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  amount     Decimal  @db.Decimal(14, 2)
+  method     String? // cash, bank, card
+  receivedAt DateTime @default(now())
+
+  allocations ReceiptAllocation[]
+
+  @@index([companyId])
+  @@index([customerId])
+}
+
+// Partial allocation of a receipt against one or more invoices, Section 5.2 step 8
+model ReceiptAllocation {
+  id        String  @id @default(cuid())
+  receiptId String
+  receipt   Receipt @relation(fields: [receiptId], references: [id])
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id])
+  amount    Decimal @db.Decimal(14, 2)
+
+  @@index([receiptId])
+  @@index([invoiceId])
+}
+
+// ---------------------------------------------------------------------------
+// Purchases (Section 4.6, workflow 5.3)
+// ---------------------------------------------------------------------------
+
+model PurchaseBill {
+  id           String       @id @default(cuid())
+  companyId    String
+  company      Company      @relation(fields: [companyId], references: [id])
+  supplierId   String
+  supplier     Supplier     @relation(fields: [supplierId], references: [id])
+  supplierRef  String? // supplier's own invoice number, Section 5.3 step 1
+  status       InvoiceStatus @default(DRAFT)
+  billDate     DateTime     @default(now())
+  dueDate      DateTime?
+  subtotal     Decimal      @default(0) @db.Decimal(14, 2)
+  taxTotal     Decimal      @default(0) @db.Decimal(14, 2)
+  grandTotal   Decimal      @default(0) @db.Decimal(14, 2)
+  postedAt     DateTime?
+
+  lines       PurchaseBillLine[]
+  allocations PaymentAllocation[]
+
+  @@index([companyId])
+  @@index([supplierId])
+}
+
+model PurchaseBillLine {
+  id             String       @id @default(cuid())
+  purchaseBillId String
+  purchaseBill   PurchaseBill @relation(fields: [purchaseBillId], references: [id])
+  productId      String
+  product        Product      @relation(fields: [productId], references: [id])
+  quantity       Decimal      @db.Decimal(14, 3)
+  unitCost       Decimal      @db.Decimal(14, 2)
+  taxRate        Decimal      @default(0) @db.Decimal(5, 2)
+  lineTotal      Decimal      @db.Decimal(14, 2)
+
+  @@index([purchaseBillId])
+}
+
+model SupplierPayment {
+  id         String   @id @default(cuid())
+  companyId  String
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+  amount     Decimal  @db.Decimal(14, 2)
+  method     String?
+  paidAt     DateTime @default(now())
+
+  allocations PaymentAllocation[]
+
+  @@index([companyId])
+  @@index([supplierId])
+}
+
+model PaymentAllocation {
+  id                String          @id @default(cuid())
+  paymentId         String
+  payment           SupplierPayment @relation(fields: [paymentId], references: [id])
+  purchaseBillId    String
+  purchaseBill      PurchaseBill    @relation(fields: [purchaseBillId], references: [id])
+  amount            Decimal         @db.Decimal(14, 2)
+
+  @@index([paymentId])
+  @@index([purchaseBillId])
+}
+
+// ---------------------------------------------------------------------------
+// Inventory (Section 4.7)
+// ---------------------------------------------------------------------------
+
+model StockBalance {
+  id          String    @id @default(cuid())
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id])
+  quantity    Decimal   @default(0) @db.Decimal(14, 3)
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([warehouseId, productId])
+}
+
+model StockMovement {
+  id          String       @id @default(cuid())
+  warehouseId String
+  warehouse   Warehouse    @relation(fields: [warehouseId], references: [id])
+  productId   String
+  product     Product      @relation(fields: [productId], references: [id])
+  quantity    Decimal      @db.Decimal(14, 3) // signed: +receipt, -issue
+  reason      MovementReason
+  reference   String? // invoice/purchase bill id, or free-text reason for adjustments
+  approvedBy  String? // Section 5.4: approval threshold for large/value-sensitive adjustments
+  createdAt   DateTime     @default(now())
+  createdBy   String
+
+  @@index([warehouseId, productId])
+}
+
+enum MovementReason {
+  SALE_ISSUE
+  PURCHASE_RECEIPT
+  ADJUSTMENT
+  TRANSFER // Phase 3, Section 4.7
+}
+
+// ---------------------------------------------------------------------------
+// Accounting (Section 4.8, Appendix C sample posting rules)
+// ---------------------------------------------------------------------------
+
+model Account {
+  id        String      @id @default(cuid())
+  companyId String
+  company   Company     @relation(fields: [companyId], references: [id])
+  code      String
+  name      String
+  type      AccountType
+  // Maps this account to an AccountRole from the posting-rule engine
+  // (packages/shared/src/posting-rules.ts), e.g. "ACCOUNTS_RECEIVABLE".
+  // Nullable because not every account a company adds needs to back a
+  // posting rule (e.g. a company might add sub-accounts for reporting).
+  // The API resolves posting entries by looking up accounts with a
+  // matching role for the company — see apps/api/src/common/account-role-resolver.ts.
+  role      String?
+
+  journalLines JournalLine[]
+
+  @@index([companyId])
+  @@index([companyId, role])
+  @@unique([companyId, code])
+}
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  INCOME
+  EXPENSE
+}
+
+model JournalEntry {
+  id           String   @id @default(cuid())
+  companyId    String
+  entryDate    DateTime @default(now())
+  sourceType   String // "invoice" | "purchase_bill" | "receipt" | "payment" | "manual" | "adjustment"
+  sourceId     String? // id of the originating transaction
+  isReversal   Boolean  @default(false) // Section 8.3: corrections use controlled reversals
+  reversalOfId String?
+  createdBy    String
+  createdAt    DateTime @default(now())
+
+  lines JournalLine[]
+
+  @@index([companyId])
+}
+
+model JournalLine {
+  id             String       @id @default(cuid())
+  journalEntryId String
+  journalEntry   JournalEntry @relation(fields: [journalEntryId], references: [id])
+  accountId      String
+  account        Account      @relation(fields: [accountId], references: [id])
+  debit          Decimal      @default(0) @db.Decimal(14, 2)
+  credit         Decimal      @default(0) @db.Decimal(14, 2)
+
+  @@index([journalEntryId])
+  @@index([accountId])
+}
+
+// ---------------------------------------------------------------------------
+// Connector platform (Section 7 — Tally read-only sync)
+// ---------------------------------------------------------------------------
+
+model Connector {
+  id             String    @id @default(cuid())
+  companyId      String
+  company        Company   @relation(fields: [companyId], references: [id])
+  sourceSystem   String    @default("TALLY")
+  sourceCompany  String? // Tally company name selected during setup, Section 5.7 step 2
+  hostIdentity   String?
+  version        String?
+  lastHeartbeat  DateTime?
+  lastSuccessSync DateTime?
+  status         ConnectorStatus @default(PENDING_SETUP)
+
+  syncBatches SyncBatch[]
+
+  @@index([companyId])
+}
+
+enum ConnectorStatus {
+  PENDING_SETUP
+  HEALTHY
+  DELAYED
+  ERROR
+  REVOKED
+}
+
+model SyncBatch {
+  id           String     @id @default(cuid())
+  connectorId  String
+  connector    Connector  @relation(fields: [connectorId], references: [id])
+  startedAt    DateTime   @default(now())
+  completedAt  DateTime?
+  recordCount  Int        @default(0)
+  controlTotal Decimal?   @db.Decimal(14, 2) // reconciliation total, Section 7.3
+  checkpoint   String? // idempotency / resume checkpoint, Section 7.2
+
+  errors SyncError[]
+
+  @@index([connectorId])
+}
+
+model SyncError {
+  id          String    @id @default(cuid())
+  syncBatchId String
+  syncBatch   SyncBatch @relation(fields: [syncBatchId], references: [id])
+  code        String
+  message     String
+  createdAt   DateTime  @default(now())
+
+  @@index([syncBatchId])
+}
+
+// ---------------------------------------------------------------------------
+// Commercial (Section 13 — subscriptions, plans, support)
+// ---------------------------------------------------------------------------
+
+model Plan {
+  id    String @id @default(cuid())
+  name  String @unique // Mobile | Business | Business Plus | Retail (later) | Enterprise, Table 21
+  code  String @unique
+
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id        String   @id @default(cuid())
+  tenantId  String   @unique
+  tenant    Tenant   @relatio

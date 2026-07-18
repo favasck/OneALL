@@ -1,0 +1,24 @@
+# Local Postgres for development only — Section 8.3 says the transactional
+# database is the source of truth. Production region/provider is still an
+# open decision (Decision Backlog Tracker, "Cloud region/provider and data
+# location", due Week 5) — this is not that.
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: oneall
+      POSTGRES_PASSWORD: oneall
+      POSTGRES_DB: oneall_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - oneall_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oneall -d oneall_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  oneall_pg_data:

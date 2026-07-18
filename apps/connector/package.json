@@ -1,0 +1,18 @@
+{
+  "name": "@oneall/connector",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OneAll Tally connector — Section 7. Read-only, incremental, idempotent sync from a local Tally installation to the OneAll cloud.",
+  "scripts": {
+    "dev": "ts-node src/index.ts",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@oneall/shared": "0.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "ts-node": "^10.9.2",
+    "@types/node": "^20.14.0"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "oneall",
+  "private": true,
+  "version": "0.1.0",
+  "description": "OneAll — native SME business-management system, universal mobile app, and Tally connector platform. Monorepo scaffold generated from OneAll_Master_Project_Plan_v1.1.docx (Stage 1, Weeks 3-7).",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run start:dev -w apps/api",
+    "dev:web": "npm run dev -w apps/web",
+    "dev:mobile": "npm run start -w apps/mobile",
+    "dev:connector": "npm run dev -w apps/connector",
+    "db:generate": "npm run generate -w packages/db",
+    "db:migrate": "npm run migrate -w packages/db",
+    "db:seed": "npm run seed -w packages/db",
+    "db:up": "docker compose up -d postgres",
+    "build:shared": "npm run build -w packages/shared",
+    "build:db": "npm run build -w packages/db",
+    "build:api": "npm run build -w apps/api",
+    "build:web": "npm run build -w apps/web",
+    "build": "npm run build:shared && npm run build:db && npm run build:api && npm run build:web",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
