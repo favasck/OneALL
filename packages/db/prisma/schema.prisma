@@ -10,8 +10,14 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Supabase's pooled connection (pgbouncer, transaction mode) doesn't
+  // support the session-level advisory locks Prisma needs for schema
+  // pushes/migrations. DIRECT_URL is the un-pooled connection, used only
+  // for `prisma db push` / `migrate` — runtime queries still go through
+  // the pooled DATABASE_URL above. Both point at the same database.
+  directUrl = env("DIRECT_URL")
 }
 
 // ---------------------------------------------------------------------------
@@ -591,4 +597,18 @@ model Plan {
 model Subscription {
   id        String   @id @default(cuid())
   tenantId  String   @unique
-  tenant    Tenant   @relatio
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  planId    String
+  plan      Plan     @relation(fields: [planId], references: [id])
+  status    String   @default("trial") // trial | active | suspended | cancelled
+  startedAt DateTime @default(now())
+}
+
+model SupportCase {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  subject   String
+  status    String   @default("open")
+  createdAt DateTime @default(now())
+}

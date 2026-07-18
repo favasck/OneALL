@@ -13,6 +13,7 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "bcryptjs": "^2.4.3",
+    "express": "^4.19.2",
     "@oneall/db": "0.1.0",
     "@oneall/shared": "0.1.0"
   },

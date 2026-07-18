@@ -17,6 +17,18 @@ const ALL_PERMISSIONS: Array<{ module: string; action: string }> = [
 ].flatMap((module) => ["view", "create", "edit", "approve", "void", "export", "share"].map((action) => ({ module, action })));
 
 async function main() {
+  // Idempotent: safe to run on every deploy (e.g. as part of the Vercel
+  // build command), not just once. Without this check, a second run would
+  // throw on the unique email constraint (User.email) or just duplicate
+  // every other row, since the rest of this script uses .create(), not
+  // .upsert() — that's fine for a from-scratch seed, but not for a script
+  // that runs on every build.
+  const existing = await prisma.tenant.findFirst({ where: { name: "Al Waha Trading Co." } });
+  if (existing) {
+    console.log(`Seed already applied (tenant ${existing.id} exists) — skipping.`);
+    return;
+  }
+
   const tenant = await prisma.tenant.create({
     data: { name: "Al Waha Trading Co.", route: "NATIVE" },
   });
@@ -114,4 +126,15 @@ async function main() {
     data: { userId: owner.id, roleId: ownerRole.id, companyId: company.id },
   });
 
-  console.log(`Seeded tenant "${tenant.nam
+  console.log(`Seeded tenant "${tenant.name}" — company ${company.id}, ${customers.length} customers, ${products.length} products.`);
+  console.log(`Login: owner@alwaha-trading.qa / ChangeMe123! (change this before using anywhere but local dev).`);
+}
+
+main()
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });
