@@ -38,4 +38,11 @@ export class SupplierPaymentsService {
           sourceType: "supplier_payment",
           sourceId: payment.id,
           createdBy,
-      
+          lines: { create: journalLines.map((l) => ({ accountId: accountMap[l.accountRole], debit: l.debit, credit: l.credit })) },
+        },
+      });
+
+      return payment;
+    });
+  }
+}

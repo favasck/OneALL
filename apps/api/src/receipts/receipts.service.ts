@@ -40,4 +40,11 @@ export class ReceiptsService {
           sourceType: "receipt",
           sourceId: receipt.id,
           createdBy,
-      
+          lines: { create: journalLines.map((l) => ({ accountId: accountMap[l.accountRole], debit: l.debit, credit: l.credit })) },
+        },
+      });
+
+      return receipt;
+    });
+  }
+}

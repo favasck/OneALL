@@ -87,4 +87,11 @@ export class PurchaseBillsService {
           sourceType: "purchase_bill",
           sourceId: bill.id,
           createdBy,
-          lines: { create: jo
+          lines: { create: journalLines.map((l) => ({ accountId: accountMap[l.accountRole], debit: l.debit, credit: l.credit })) },
+        },
+      });
+
+      return bill;
+    });
+  }
+}

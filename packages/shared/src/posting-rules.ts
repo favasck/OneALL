@@ -126,4 +126,14 @@ export function post(event: PostingEvent, ctx: PostingContext): JournalLineDraft
   const totalDebit = round(lines.reduce((s, l) => s + l.debit, 0));
   const totalCredit = round(lines.reduce((s, l) => s + l.credit, 0));
   if (totalDebit !== totalCredit) {
-    th
+    throw new Error(
+      `Posting rule "${event}" produced an unbalanced entry: debit ${totalDebit} != credit ${totalCredit}. ` +
+      `This is a bug in the rule, not the transaction — do not post it.`,
+    );
+  }
+  return lines;
+}
+
+function round(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}

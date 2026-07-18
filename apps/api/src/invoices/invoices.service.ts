@@ -115,4 +115,7 @@ export class InvoicesService {
   }
 
   private async nextInvoiceNumber(tx: any, companyId: string) {
-    const count = await tx.invoice.count({ where: { c
+    const count = await tx.invoice.count({ where: { companyId } });
+    return `INV-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`;
+  }
+}
