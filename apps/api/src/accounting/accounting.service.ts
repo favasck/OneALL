@@ -11,6 +11,17 @@ function round(n: number): number {
 // tree — isGroup rollup nodes above postable leaf accounts — so a Balance
 // Sheet / P&L can roll ledger balances up to their parent group instead of
 // only ever showing a flat list of every ledger.
+export interface AccountTreeNode {
+  id: string;
+  code: string;
+  name: string;
+  type: string;
+  isGroup: boolean;
+  parentAccountId: string | null;
+  balance: number;
+  children: AccountTreeNode[];
+}
+
 @Injectable()
 export class AccountingService {
   listAccounts(companyId: string) {
@@ -33,7 +44,7 @@ export class AccountingService {
     });
   }
 
-  async accountTree(companyId: string) {
+  async accountTree(companyId: string): Promise<AccountTreeNode[]> {
     const accounts = await prisma.account.findMany({ where: { companyId }, orderBy: { code: "asc" } });
     const totals = await this.ledgerTotals(companyId);
     return this.buildTree(accounts, totals);
@@ -114,9 +125,8 @@ export class AccountingService {
   private buildTree(
     accounts: Array<{ id: string; code: string; name: string; type: string; isGroup: boolean; parentAccountId: string | null }>,
     totals: Map<string, { debit: number; credit: number }>,
-  ) {
-    type Node = { id: string; code: string; name: string; type: string; isGroup: boolean; parentAccountId: string | null; balance: number; children: Node[] };
-    const byId = new Map<string, Node>(
+  ): AccountTreeNode[] {
+    const byId = new Map<string, AccountTreeNode>(
       accounts.map((a) => [a.id, { id: a.id, code: a.code, name: a.name, type: a.type, isGroup: a.isGroup, parentAccountId: a.parentAccountId, children: [], balance: 0 }]),
     );
 
@@ -127,14 +137,14 @@ export class AccountingService {
       }
     }
 
-    const roots: Node[] = [];
+    const roots: AccountTreeNode[] = [];
     for (const a of accounts) {
       const node = byId.get(a.id)!;
       if (a.parentAccountId && byId.has(a.parentAccountId)) byId.get(a.parentAccountId)!.children.push(node);
       else roots.push(node);
     }
 
-    const rollup = (node: Node): number => {
+    const rollup = (node: AccountTreeNode): number => {
       if (node.isGroup) node.balance = round(node.children.reduce((s, c) => s + rollup(c), 0));
       return node.balance;
     };
