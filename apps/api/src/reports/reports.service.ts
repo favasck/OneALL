@@ -48,13 +48,22 @@ export class ReportsService {
       where: { companyId },
       include: { stockBalances: true },
     });
-    return products.map((p: any) => ({
-      productId: p.id,
-      sku: p.sku,
-      name: p.name,
-      onHand: p.stockBalances.reduce((s: number, b: any) => s + Number(b.quantity), 0),
-      reorderLevel: Number(p.reorderLevel),
-      lowStock: p.stockBalances.reduce((s: number, b: any) => s + Number(b.quantity), 0) < Number(p.reorderLevel),
-    }));
+    return products.map((p: any) => {
+      const onHand = p.stockBalances.reduce((s: number, b: any) => s + Number(b.quantity), 0);
+      // Weighted-average valuationRate across warehouses, weighted by each
+      // warehouse's quantity — matches how StockBalance.valuationRate is
+      // maintained per-warehouse by receiveStock()/issueStock().
+      const stockValue = p.stockBalances.reduce((s: number, b: any) => s + Number(b.quantity) * Number(b.valuationRate), 0);
+      return {
+        productId: p.id,
+        sku: p.sku,
+        name: p.name,
+        onHand,
+        valuationRate: onHand !== 0 ? Math.round((stockValue / onHand) * 10000) / 10000 : 0,
+        stockValue: Math.round(stockValue * 100) / 100,
+        reorderLevel: Number(p.reorderLevel),
+        lowStock: onHand < Number(p.reorderLevel),
+      };
+    });
   }
 }

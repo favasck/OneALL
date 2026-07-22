@@ -14,6 +14,12 @@ import { SupplierPaymentsModule } from "./supplier-payments/supplier-payments.mo
 import { InventoryModule } from "./inventory/inventory.module";
 import { AccountingModule } from "./accounting/accounting.module";
 import { ReportsModule } from "./reports/reports.module";
+import { SalesOrdersModule } from "./sales-orders/sales-orders.module";
+import { DeliveryNotesModule } from "./delivery-notes/delivery-notes.module";
+import { PurchaseOrdersModule } from "./purchase-orders/purchase-orders.module";
+import { PurchaseReceiptsModule } from "./purchase-receipts/purchase-receipts.module";
+import { LandedCostModule } from "./landed-cost/landed-cost.module";
+import { BankReconciliationModule } from "./bank-reconciliation/bank-reconciliation.module";
 
 @Module({
   imports: [
@@ -29,6 +35,12 @@ import { ReportsModule } from "./reports/reports.module";
     InventoryModule,
     AccountingModule,
     ReportsModule,
+    SalesOrdersModule,
+    DeliveryNotesModule,
+    PurchaseOrdersModule,
+    PurchaseReceiptsModule,
+    LandedCostModule,
+    BankReconciliationModule,
   ],
   providers: [
     // Order matters: SessionAuthGuard resolves the caller and builds

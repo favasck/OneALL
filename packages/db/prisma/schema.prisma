@@ -1,9 +1,23 @@
 // OneAll — data model
 // Derived from OneAll_Master_Project_Plan_v1.1.docx, Section 8.2 "Core entities".
-// This is a Stage 1 scaffold: fields cover the MVP scope (Section 2.2) plus the
-// hooks Section 2.3 explicitly defers (e.g. CreditNote, WarehouseTransfer) are
-// modeled but marked // Phase 3 / later where the plan says so, so the schema
-// doesn't need reshaping when those features are built.
+//
+// This revision adds four workstreams inspired by (but independently
+// implemented from — see note below) Frappe/ERPNext's accounting design:
+//   1. Chart of Accounts as a tree (Account.parentAccountId/isGroup) so
+//      ledger balances roll up into group totals for real financial
+//      statements (Balance Sheet, P&L), not just a flat trial balance.
+//   2. Moving-average stock valuation (StockBalance.valuationRate) so COGS
+//      posted on a sale reflects real weighted-average cost, not zero.
+//   3. Order -> Delivery/Receipt -> Invoice/Bill as a parallel workflow to
+//      the existing direct-invoice path, supporting partial fulfillment.
+//   4. Landed cost allocation (freight/customs into stock value) and a
+//      lightweight bank reconciliation model.
+//
+// Frappe/ERPNext is GPL-3.0 licensed. Nothing here is copied from its
+// source — these are our own models, independently written, informed only
+// by publicly documented concepts (chart of accounts trees, moving average
+// valuation, landed cost vouchers, order-to-invoice flows are standard
+// accounting/ERP patterns, not Frappe-original IP).
 
 generator client {
   provider = "prisma-client-js"
@@ -55,17 +69,23 @@ model Company {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  branches         Branch[]
-  financialPeriods FinancialPeriod[]
-  customers        Customer[]
-  suppliers        Supplier[]
-  products         Product[]
-  taxCodes         TaxCode[]
-  accounts         Account[]
-  invoices         Invoice[]
-  purchaseBills    PurchaseBill[]
-  userAssignments  UserRoleAssignment[]
-  connectors       Connector[]
+  branches            Branch[]
+  financialPeriods    FinancialPeriod[]
+  customers           Customer[]
+  suppliers           Supplier[]
+  products            Product[]
+  taxCodes            TaxCode[]
+  accounts            Account[]
+  invoices            Invoice[]
+  purchaseBills       PurchaseBill[]
+  userAssignments     UserRoleAssignment[]
+  connectors          Connector[]
+  salesOrders         SalesOrder[]
+  deliveryNotes       DeliveryNote[]
+  purchaseOrders      PurchaseOrder[]
+  purchaseReceipts    PurchaseReceipt[]
+  landedCostVouchers  LandedCostVoucher[]
+  bankStatementLines  BankStatementLine[]
 
   @@index([tenantId])
 }
@@ -88,8 +108,10 @@ model Warehouse {
   branch   Branch  @relation(fields: [branchId], references: [id])
   name     String
 
-  stockBalances  StockBalance[]
-  stockMovements StockMovement[]
+  stockBalances     StockBalance[]
+  stockMovements    StockMovement[]
+  deliveryNotes     DeliveryNote[]
+  purchaseReceipts  PurchaseReceipt[]
 
   @@index([branchId])
 }
@@ -212,8 +234,10 @@ model Customer {
   openingBalance Decimal @default(0) @db.Decimal(14, 2)
   createdAt     DateTime @default(now())
 
-  invoices Invoice[]
-  receipts Receipt[]
+  invoices     Invoice[]
+  receipts     Receipt[]
+  salesOrders  SalesOrder[]
+  deliveryNotes DeliveryNote[]
 
   @@index([companyId])
 }
@@ -228,8 +252,10 @@ model Supplier {
   openingBalance Decimal @default(0) @db.Decimal(14, 2)
   createdAt    DateTime @default(now())
 
-  purchaseBills PurchaseBill[]
-  payments      SupplierPayment[]
+  purchaseBills     PurchaseBill[]
+  payments          SupplierPayment[]
+  purchaseOrders    PurchaseOrder[]
+  purchaseReceipts  PurchaseReceipt[]
 
   @@index([companyId])
 }
@@ -255,10 +281,14 @@ model Product {
   reorderLevel  Decimal       @default(0) @db.Decimal(14, 2)
   createdAt     DateTime      @default(now())
 
-  invoiceLines  InvoiceLine[]
-  purchaseLines PurchaseBillLine[]
-  stockBalances StockBalance[]
-  stockMovements StockMovement[]
+  invoiceLines          InvoiceLine[]
+  purchaseLines         PurchaseBillLine[]
+  stockBalances         StockBalance[]
+  stockMovements        StockMovement[]
+  salesOrderLines       SalesOrderLine[]
+  deliveryNoteLines     DeliveryNoteLine[]
+  purchaseOrderLines    PurchaseOrderLine[]
+  purchaseReceiptLines  PurchaseReceiptLine[]
 
   @@index([companyId])
   @@unique([companyId, sku])
@@ -284,7 +314,210 @@ model TaxCode {
 }
 
 // ---------------------------------------------------------------------------
+// Sales order -> delivery -> invoice workflow (parallel to the direct-invoice
+// path below, for businesses that need partial fulfillment / order tracking).
+// ---------------------------------------------------------------------------
+
+enum OrderStatus {
+  DRAFT
+  CONFIRMED
+  CLOSED
+  CANCELLED
+}
+
+model SalesOrder {
+  id          String       @id @default(cuid())
+  companyId   String
+  company     Company      @relation(fields: [companyId], references: [id])
+  customerId  String
+  customer    Customer     @relation(fields: [customerId], references: [id])
+  number      String
+  status      OrderStatus  @default(DRAFT)
+  orderDate   DateTime     @default(now())
+  subtotal    Decimal      @default(0) @db.Decimal(14, 2)
+  taxTotal    Decimal      @default(0) @db.Decimal(14, 2)
+  grandTotal  Decimal      @default(0) @db.Decimal(14, 2)
+  createdBy   String
+  createdAt   DateTime     @default(now())
+
+  lines         SalesOrderLine[]
+  deliveryNotes DeliveryNote[]
+
+  @@index([companyId])
+  @@unique([companyId, number])
+}
+
+model SalesOrderLine {
+  id           String     @id @default(cuid())
+  salesOrderId String
+  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id])
+  productId    String
+  product      Product    @relation(fields: [productId], references: [id])
+  quantity     Decimal    @db.Decimal(14, 3)
+  unitPrice    Decimal    @db.Decimal(14, 2)
+  taxRate      Decimal    @default(0) @db.Decimal(5, 2)
+  deliveredQty Decimal    @default(0) @db.Decimal(14, 3)
+
+  @@index([salesOrderId])
+}
+
+model DeliveryNote {
+  id           String        @id @default(cuid())
+  companyId    String
+  company      Company       @relation(fields: [companyId], references: [id])
+  customerId   String
+  customer     Customer      @relation(fields: [customerId], references: [id])
+  salesOrderId String?
+  salesOrder   SalesOrder?   @relation(fields: [salesOrderId], references: [id])
+  warehouseId  String
+  warehouse    Warehouse     @relation(fields: [warehouseId], references: [id])
+  number       String
+  status       InvoiceStatus @default(DRAFT) // DRAFT | POSTED | VOID — reused shape, see InvoiceStatus below
+  deliveryDate DateTime      @default(now())
+  createdBy    String
+  createdAt    DateTime      @default(now())
+
+  lines DeliveryNoteLine[]
+
+  @@index([companyId])
+  @@unique([companyId, number])
+}
+
+model DeliveryNoteLine {
+  id             String        @id @default(cuid())
+  deliveryNoteId String
+  deliveryNote   DeliveryNote  @relation(fields: [deliveryNoteId], references: [id])
+  salesOrderLineId String?
+  productId      String
+  product        Product       @relation(fields: [productId], references: [id])
+  quantity       Decimal       @db.Decimal(14, 3)
+  unitCost       Decimal       @default(0) @db.Decimal(14, 4) // moving-average cost captured when this line is posted (stock actually issued)
+  invoicedQty    Decimal       @default(0) @db.Decimal(14, 3)
+
+  invoiceLines InvoiceLine[]
+
+  @@index([deliveryNoteId])
+}
+
+// ---------------------------------------------------------------------------
+// Purchase order -> receipt -> bill workflow (parallel to the direct-bill
+// path below).
+// ---------------------------------------------------------------------------
+
+model PurchaseOrder {
+  id          String      @id @default(cuid())
+  companyId   String
+  company     Company     @relation(fields: [companyId], references: [id])
+  supplierId  String
+  supplier    Supplier    @relation(fields: [supplierId], references: [id])
+  number      String
+  status      OrderStatus @default(DRAFT)
+  orderDate   DateTime    @default(now())
+  subtotal    Decimal     @default(0) @db.Decimal(14, 2)
+  taxTotal    Decimal     @default(0) @db.Decimal(14, 2)
+  grandTotal  Decimal     @default(0) @db.Decimal(14, 2)
+  createdBy   String
+  createdAt   DateTime    @default(now())
+
+  lines             PurchaseOrderLine[]
+  purchaseReceipts  PurchaseReceipt[]
+
+  @@index([companyId])
+  @@unique([companyId, number])
+}
+
+model PurchaseOrderLine {
+  id              String        @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  productId       String
+  product         Product       @relation(fields: [productId], references: [id])
+  quantity        Decimal       @db.Decimal(14, 3)
+  unitCost        Decimal       @db.Decimal(14, 2)
+  taxRate         Decimal       @default(0) @db.Decimal(5, 2)
+  receivedQty     Decimal       @default(0) @db.Decimal(14, 3)
+
+  @@index([purchaseOrderId])
+}
+
+model PurchaseReceipt {
+  id              String        @id @default(cuid())
+  companyId       String
+  company         Company       @relation(fields: [companyId], references: [id])
+  supplierId      String
+  supplier        Supplier      @relation(fields: [supplierId], references: [id])
+  purchaseOrderId String?
+  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  warehouseId     String
+  warehouse       Warehouse     @relation(fields: [warehouseId], references: [id])
+  number          String
+  status          InvoiceStatus @default(DRAFT) // DRAFT | POSTED | VOID
+  receiptDate     DateTime      @default(now())
+  createdBy       String
+  createdAt       DateTime      @default(now())
+
+  lines               PurchaseReceiptLine[]
+  landedCostVouchers  LandedCostVoucher[]
+
+  @@index([companyId])
+  @@unique([companyId, number])
+}
+
+model PurchaseReceiptLine {
+  id                String          @id @default(cuid())
+  purchaseReceiptId String
+  purchaseReceipt   PurchaseReceipt @relation(fields: [purchaseReceiptId], references: [id])
+  purchaseOrderLineId String?
+  productId         String
+  product           Product         @relation(fields: [productId], references: [id])
+  quantity          Decimal         @db.Decimal(14, 3)
+  unitCost          Decimal         @db.Decimal(14, 2) // updated in place when a landed cost voucher is applied
+  billedQty         Decimal         @default(0) @db.Decimal(14, 3)
+
+  purchaseBillLines PurchaseBillLine[]
+
+  @@index([purchaseReceiptId])
+}
+
+// ---------------------------------------------------------------------------
+// Landed cost — allocate freight/customs/other charges from a purchase
+// receipt across the received items' stock value, proportional to each
+// line's received value (quantity x unitCost).
+// ---------------------------------------------------------------------------
+
+model LandedCostVoucher {
+  id                String          @id @default(cuid())
+  companyId         String
+  company           Company         @relation(fields: [companyId], references: [id])
+  purchaseReceiptId String
+  purchaseReceipt   PurchaseReceipt @relation(fields: [purchaseReceiptId], references: [id])
+  totalAmount       Decimal         @default(0) @db.Decimal(14, 2)
+  appliedAt         DateTime?
+  createdBy         String
+  createdAt         DateTime        @default(now())
+
+  chargeLines LandedCostChargeLine[]
+
+  @@index([companyId])
+  @@index([purchaseReceiptId])
+}
+
+model LandedCostChargeLine {
+  id          String            @id @default(cuid())
+  voucherId   String
+  voucher     LandedCostVoucher @relation(fields: [voucherId], references: [id])
+  description String
+  amount      Decimal           @db.Decimal(14, 2)
+  accountId   String? // expense/payable account this charge came from, e.g. Freight Payable
+  account     Account?          @relation(fields: [accountId], references: [id])
+
+  @@index([voucherId])
+}
+
+// ---------------------------------------------------------------------------
 // Sales (Section 4.5, workflow 5.2 — "start with invoice -> receipt")
+// Invoices can either be created directly (walk-in / cash sale) or against
+// a DeliveryNote line from the order workflow above.
 // ---------------------------------------------------------------------------
 
 model Invoice {
@@ -299,6 +532,7 @@ model Invoice {
   subtotal      Decimal       @default(0) @db.Decimal(14, 2)
   taxTotal      Decimal       @default(0) @db.Decimal(14, 2)
   grandTotal    Decimal       @default(0) @db.Decimal(14, 2)
+  costOfGoodsTotal Decimal    @default(0) @db.Decimal(14, 2) // moving-average COGS posted alongside revenue
   postedAt      DateTime?
   voidedAt      DateTime? // controlled void, Section 5.2 step 10
   createdBy     String
@@ -326,6 +560,10 @@ model InvoiceLine {
   unitPrice Decimal @db.Decimal(14, 2)
   taxRate   Decimal @default(0) @db.Decimal(5, 2)
   lineTotal Decimal @db.Decimal(14, 2)
+  unitCost  Decimal @default(0) @db.Decimal(14, 2) // moving-average cost captured at time of sale, for COGS
+
+  deliveryNoteLineId String?
+  deliveryNoteLine   DeliveryNoteLine? @relation(fields: [deliveryNoteLineId], references: [id])
 
   @@index([invoiceId])
 }
@@ -359,7 +597,8 @@ model ReceiptAllocation {
 }
 
 // ---------------------------------------------------------------------------
-// Purchases (Section 4.6, workflow 5.3)
+// Purchases (Section 4.6, workflow 5.3). Bills can either be created
+// directly, or against a PurchaseReceipt line from the order workflow above.
 // ---------------------------------------------------------------------------
 
 model PurchaseBill {
@@ -395,6 +634,9 @@ model PurchaseBillLine {
   taxRate        Decimal      @default(0) @db.Decimal(5, 2)
   lineTotal      Decimal      @db.Decimal(14, 2)
 
+  purchaseReceiptLineId String?
+  purchaseReceiptLine   PurchaseReceiptLine? @relation(fields: [purchaseReceiptLineId], references: [id])
+
   @@index([purchaseBillId])
 }
 
@@ -426,33 +668,38 @@ model PaymentAllocation {
 }
 
 // ---------------------------------------------------------------------------
-// Inventory (Section 4.7)
+// Inventory (Section 4.7). valuationRate on StockBalance is the running
+// moving-average cost per unit for that product in that warehouse — updated
+// on every purchase receipt/bill and every landed cost voucher, consumed
+// (read, not changed) on every sale to post accurate COGS.
 // ---------------------------------------------------------------------------
 
 model StockBalance {
-  id          String    @id @default(cuid())
-  warehouseId String
-  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
-  productId   String
-  product     Product   @relation(fields: [productId], references: [id])
-  quantity    Decimal   @default(0) @db.Decimal(14, 3)
-  updatedAt   DateTime  @updatedAt
+  id             String    @id @default(cuid())
+  warehouseId    String
+  warehouse      Warehouse @relation(fields: [warehouseId], references: [id])
+  productId      String
+  product        Product   @relation(fields: [productId], references: [id])
+  quantity       Decimal   @default(0) @db.Decimal(14, 3)
+  valuationRate  Decimal   @default(0) @db.Decimal(14, 4) // moving-average cost per unit
+  updatedAt      DateTime  @updatedAt
 
   @@unique([warehouseId, productId])
 }
 
 model StockMovement {
-  id          String       @id @default(cuid())
-  warehouseId String
-  warehouse   Warehouse    @relation(fields: [warehouseId], references: [id])
-  productId   String
-  product     Product      @relation(fields: [productId], references: [id])
-  quantity    Decimal      @db.Decimal(14, 3) // signed: +receipt, -issue
-  reason      MovementReason
-  reference   String? // invoice/purchase bill id, or free-text reason for adjustments
-  approvedBy  String? // Section 5.4: approval threshold for large/value-sensitive adjustments
-  createdAt   DateTime     @default(now())
-  createdBy   String
+  id            String       @id @default(cuid())
+  warehouseId   String
+  warehouse     Warehouse    @relation(fields: [warehouseId], references: [id])
+  productId     String
+  product       Product      @relation(fields: [productId], references: [id])
+  quantity      Decimal      @db.Decimal(14, 3) // signed: +receipt, -issue
+  valuationRate Decimal      @default(0) @db.Decimal(14, 4) // cost per unit at the moment of this movement
+  reason        MovementReason
+  reference     String? // invoice/purchase bill id, or free-text reason for adjustments
+  approvedBy    String? // Section 5.4: approval threshold for large/value-sensitive adjustments
+  createdAt     DateTime     @default(now())
+  createdBy     String
 
   @@index([warehouseId, productId])
 }
@@ -462,19 +709,28 @@ enum MovementReason {
   PURCHASE_RECEIPT
   ADJUSTMENT
   TRANSFER // Phase 3, Section 4.7
+  LANDED_COST // valuation-only revaluation, no quantity change
 }
 
 // ---------------------------------------------------------------------------
 // Accounting (Section 4.8, Appendix C sample posting rules)
+// Account is now a tree: isGroup accounts are subtotal/rollup nodes (e.g.
+// "Current Assets"); only leaf (isGroup = false) accounts can receive
+// JournalLine postings. This is what lets the Balance Sheet / P&L reports
+// roll ledger balances up to their parent group.
 // ---------------------------------------------------------------------------
 
 model Account {
-  id        String      @id @default(cuid())
-  companyId String
-  company   Company     @relation(fields: [companyId], references: [id])
-  code      String
-  name      String
-  type      AccountType
+  id              String      @id @default(cuid())
+  companyId       String
+  company         Company     @relation(fields: [companyId], references: [id])
+  code            String
+  name            String
+  type            AccountType
+  isGroup         Boolean     @default(false)
+  parentAccountId String?
+  parentAccount   Account?    @relation("AccountTree", fields: [parentAccountId], references: [id])
+  children        Account[]   @relation("AccountTree")
   // Maps this account to an AccountRole from the posting-rule engine
   // (packages/shared/src/posting-rules.ts), e.g. "ACCOUNTS_RECEIVABLE".
   // Nullable because not every account a company adds needs to back a
@@ -483,10 +739,13 @@ model Account {
   // matching role for the company — see apps/api/src/common/account-role-resolver.ts.
   role      String?
 
-  journalLines JournalLine[]
+  journalLines        JournalLine[]
+  landedCostCharges    LandedCostChargeLine[]
+  bankStatementLines   BankStatementLine[]
 
   @@index([companyId])
   @@index([companyId, role])
+  @@index([parentAccountId])
   @@unique([companyId, code])
 }
 
@@ -502,7 +761,7 @@ model JournalEntry {
   id           String   @id @default(cuid())
   companyId    String
   entryDate    DateTime @default(now())
-  sourceType   String // "invoice" | "purchase_bill" | "receipt" | "payment" | "manual" | "adjustment"
+  sourceType   String // "invoice" | "purchase_bill" | "receipt" | "payment" | "manual" | "adjustment" | "landed_cost"
   sourceId     String? // id of the originating transaction
   isReversal   Boolean  @default(false) // Section 8.3: corrections use controlled reversals
   reversalOfId String?
@@ -521,9 +780,36 @@ model JournalLine {
   accountId      String
   account        Account      @relation(fields: [accountId], references: [id])
   debit          Decimal      @default(0) @db.Decimal(14, 2)
-  credit         Decimal      @default(0) @db.Decimal(14, 2)
+  credit          Decimal      @default(0) @db.Decimal(14, 2)
+
+  bankStatementMatch BankStatementLine[]
 
   @@index([journalEntryId])
+  @@index([accountId])
+}
+
+// ---------------------------------------------------------------------------
+// Bank reconciliation — lightweight: import/enter statement lines, match
+// each against a JournalLine posted to a CASH_OR_BANK-role account.
+// ---------------------------------------------------------------------------
+
+model BankStatementLine {
+  id          String       @id @default(cuid())
+  companyId   String
+  company     Company      @relation(fields: [companyId], references: [id])
+  accountId   String
+  account     Account      @relation(fields: [accountId], references: [id])
+  lineDate    DateTime
+  description String
+  amount      Decimal      @db.Decimal(14, 2) // signed: +deposit, -withdrawal
+  reconciled  Boolean      @default(false)
+
+  matchedJournalLineId String?
+  matchedJournalLine   JournalLine? @relation(fields: [matchedJournalLineId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId])
   @@index([accountId])
 }
 

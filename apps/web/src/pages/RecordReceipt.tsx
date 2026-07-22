@@ -1,18 +1,12 @@
 import { useState } from "react";
 import { apiPost } from "../api/client";
+import { useAuth } from "../auth/AuthContext";
 
-const COMPANY_ID = "REPLACE_WITH_REAL_COMPANY_ID";
+interface AllocationState { invoiceId: string; amount: number; }
 
-interface AllocationState {
-  invoiceId: string;
-  amount: number;
-}
-
-// Section 5.2 steps 8-9: record a customer receipt and allocate it across
-// one or more invoices. Posts to POST /companies/:id/receipts, which
-// validates that allocations sum to the receipt amount before running the
-// CUSTOMER_RECEIPT posting rule (receipts.service.ts).
 export default function RecordReceipt() {
+  const { user } = useAuth();
+  const companyId = user?.companyId;
   const [customerId, setCustomerId] = useState("");
   const [amount, setAmount] = useState(0);
   const [method, setMethod] = useState("BANK_TRANSFER");
@@ -26,24 +20,20 @@ export default function RecordReceipt() {
   const allocatedTotal = allocations.reduce((s, a) => s + a.amount, 0);
 
   const submit = async () => {
+    if (!companyId) { setResult("No company is assigned to your account yet."); return; }
     setResult(null);
     try {
-      const receipt = await apiPost(`/companies/${COMPANY_ID}/receipts`, {
-        customerId,
-        amount,
-        method,
-        allocations,
-      });
+      const receipt = await apiPost(`/companies/${companyId}/receipts`, { customerId, amount, method, allocations });
       setResult(`Created: ${JSON.stringify(receipt)}`);
     } catch (e) {
-      setResult(`Error (expected without a live database): ${(e as Error).message}`);
+      setResult(`Error: ${(e as Error).message}`);
     }
   };
 
   return (
     <div>
       <h2>Record receipt</h2>
-      <p className="state">Real POST to the API — will error without a live database, which is expected here.</p>
+      {!companyId && <p className="state">No company is assigned to your account yet — ask an admin to assign one in Settings.</p>}
       <div style={{ display: "grid", gap: 10, maxWidth: 420, marginBottom: 16 }}>
         <input placeholder="Customer ID" value={customerId} onChange={(e) => setCustomerId(e.target.value)} />
         <input type="number" placeholder="Amount" value={amount} onChange={(e) => setAmount(Number(e.target.value))} />

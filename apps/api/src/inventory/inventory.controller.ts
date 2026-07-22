@@ -15,7 +15,7 @@ export class InventoryController {
 
   @Post("adjustments")
   @RequirePermission("inventory", "edit")
-  adjust(@Param("companyId") _companyId: string, @Body() dto: AdjustStockDto, @Req() req: any) {
-    return this.inventoryService.adjust(dto, req.user?.id ?? "system");
+  adjust(@Param("companyId") companyId: string, @Body() dto: AdjustStockDto, @Req() req: any) {
+    return this.inventoryService.adjust(companyId, dto, req.user?.id ?? "system");
   }
 }

@@ -17,12 +17,22 @@ import { AppModule } from "./app.module";
 // real tsc first, then pointing the thin /api/index.js wrapper at the
 // compiled output, keeps Nest's DI working. Do not "simplify" this by
 // having Vercel build this file directly.
-
+//
+// Global prefix: root vercel.json rewrites "/api/(.*)" to "/api/index",
+// but Vercel preserves the ORIGINAL request path (e.g. "/api/auth/login")
+// as req.url when it reaches this function — the rewrite target is just
+// which function handles it, not a path transform. Controllers below are
+// declared without an "/api" prefix (so main.ts / local dev, which the
+// browser calls directly at "http://localhost:3000/auth/login" with no
+// "/api" segment, keeps working unchanged). So this serverless entry point
+// alone must tell Nest's router to expect the leading "/api" segment, or
+// every route 404s in production while looking completely fine locally.
 const server = express();
 let bootstrapped: Promise<void> | null = null;
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, new ExpressAdapter(server));
+  app.setGlobalPrefix("api");
   app.enableCors();
   await app.init();
 }

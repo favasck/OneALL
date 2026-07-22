@@ -1,18 +1,12 @@
 import { useState } from "react";
 import { apiPost } from "../api/client";
+import { useAuth } from "../auth/AuthContext";
 
-const COMPANY_ID = "REPLACE_WITH_REAL_COMPANY_ID";
+interface AllocationState { purchaseBillId: string; amount: number; }
 
-interface AllocationState {
-  purchaseBillId: string;
-  amount: number;
-}
-
-// Section 5.3 steps 6-7: record a supplier payment and allocate it across
-// one or more purchase bills. Posts to POST /companies/:id/supplier-payments,
-// which validates that allocations sum to the payment amount before running
-// the SUPPLIER_PAYMENT posting rule (supplier-payments.service.ts).
 export default function RecordSupplierPayment() {
+  const { user } = useAuth();
+  const companyId = user?.companyId;
   const [supplierId, setSupplierId] = useState("");
   const [amount, setAmount] = useState(0);
   const [method, setMethod] = useState("BANK_TRANSFER");
@@ -26,24 +20,20 @@ export default function RecordSupplierPayment() {
   const allocatedTotal = allocations.reduce((s, a) => s + a.amount, 0);
 
   const submit = async () => {
+    if (!companyId) { setResult("No company is assigned to your account yet."); return; }
     setResult(null);
     try {
-      const payment = await apiPost(`/companies/${COMPANY_ID}/supplier-payments`, {
-        supplierId,
-        amount,
-        method,
-        allocations,
-      });
+      const payment = await apiPost(`/companies/${companyId}/supplier-payments`, { supplierId, amount, method, allocations });
       setResult(`Created: ${JSON.stringify(payment)}`);
     } catch (e) {
-      setResult(`Error (expected without a live database): ${(e as Error).message}`);
+      setResult(`Error: ${(e as Error).message}`);
     }
   };
 
   return (
     <div>
       <h2>Record supplier payment</h2>
-      <p className="state">Real POST to the API — will error without a live database, which is expected here.</p>
+      {!companyId && <p className="state">No company is assigned to your account yet — ask an admin to assign one in Settings.</p>}
       <div style={{ display: "grid", gap: 10, maxWidth: 420, marginBottom: 16 }}>
         <input placeholder="Supplier ID" value={supplierId} onChange={(e) => setSupplierId(e.target.value)} />
         <input type="number" placeholder="Amount" value={amount} onChange={(e) => setAmount(Number(e.target.value))} />
