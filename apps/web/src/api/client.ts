@@ -1,6 +1,13 @@
 // Thin fetch wrapper. Base URL points at apps/api (Section 8.3: "API-first
 // design so Web, Mobile and connectors use governed services").
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:3000";
+//
+// Defaults to a same-origin relative "/api" path -- in production the web
+// app and the NestJS API are one Vercel deployment (vercel.json rewrites
+// /api/* to the serverless function), so no env var is required for the
+// deployed site to work. Local dev (vite on :5173, API on :3000) sets
+// VITE_API_BASE=http://localhost:3000/api in apps/web/.env.local to
+// override this, since those run on different ports.
+const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
 const TOKEN_KEY = "oneall_session_token";
 
 // Session token storage. This is a real deployed web app (not a Claude
